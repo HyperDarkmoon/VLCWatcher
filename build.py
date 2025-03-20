@@ -2,16 +2,9 @@ import sys
 from cx_Freeze import setup, Executable
 
 build_exe_options = {
-    "packages": [
-        "os", 
-        "sys", 
-        "json", 
-        "telnetlib", 
-        "psutil", 
-        "PyQt6",
-        "logging",
-        "threading",
-        "winreg"
+   "packages": [
+        "os", "sys", "json", "telnetlib", "psutil", "PyQt6",
+        "logging", "threading", "winreg", "datetime"
     ],
     "includes": [
         "PyQt6.QtCore", 

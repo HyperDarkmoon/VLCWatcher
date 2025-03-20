@@ -11,6 +11,11 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel,
 from PyQt6.QtGui import QIcon
 import winreg
 import os.path
+import logging
+import datetime
+from logging.handlers import RotatingFileHandler
+
+LOG_FILE = "vlctracker.log"
 
 ICON_FILE = "tracker.ico"
 TRAY_ICON_FILE = "tracker.png"  # 16x16 or 32x32 PNG recommended for tray
@@ -20,6 +25,38 @@ VLC_TELNET_HOST = "localhost" #VLC_TELNET_HOST
 VLC_TELNET_PORT = 4212 #VLC_TELNET_PORT
 VLC_TELNET_PASSWORD = ""  #VLC_TELNET_PASSWORD
 
+
+def setup_logging():
+    """Configure logging with rotation and different log levels"""
+    # Create rotating file handler
+    handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=1024 * 1024,  # 1MB per file
+        backupCount=3  # Keep 3 backup files
+    )
+    
+    # Set formatter
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)  # Only log warnings and errors by default
+    root_logger.addHandler(handler)
+    
+    # Create debug logger for crash dumps
+    debug_logger = logging.getLogger('debug')
+    debug_logger.setLevel(logging.DEBUG)
+    debug_logger.addHandler(handler)
+
+# Add this function to capture crashes
+def log_crash(exc_type, exc_value, exc_traceback):
+    """Log uncaught exceptions with full debug info"""
+    debug_logger = logging.getLogger('debug')
+    debug_logger.critical(
+        "Uncaught exception:",
+        exc_info=(exc_type, exc_value, exc_traceback)
+    )
 
 def add_to_startup():
     """Add the application to Windows startup"""
@@ -114,23 +151,34 @@ def is_vlc_running():
 
 def get_vlc_status_telnet(host=VLC_TELNET_HOST, port=VLC_TELNET_PORT, password=VLC_TELNET_PASSWORD):
     """
-    Connect to VLC's telnet interface, send commands and parse the output.
-    Returns a dictionary with 'file', 'time', 'length', and 'state'
-    if media is loaded; otherwise, returns None.
+    Connect to VLC's telnet interface and get current playback status.
+    Returns a dictionary with 'file', 'time', 'length', and 'state' if media is loaded.
+    Returns None if no media is playing or connection fails.
     """
+    tn = None
     try:
-        tn = telnetlib.Telnet(host, port, timeout=3)
+        if not is_vlc_running():
+            return None
+
+        tn = telnetlib.Telnet(host, port, timeout=1)
         
-        # Read until we see a prompt; handle password if needed
+        # Handle initial connection and password
         prompt = tn.read_until(b"Password: ", timeout=1)
         if b"Password:" in prompt:
-            tn.write((password + "\n").encode('utf-8'))
+            logging.debug("Password prompt received")
+            tn.write(f"{password}\n".encode('utf-8'))
+            response = tn.read_until(b">", timeout=1)
+            if b"Wrong password" in response:
+                logging.error("Wrong telnet password")
+                return None
         
-        # Send 'status' command to fetch state and file info
+        # Get current status
+        logging.debug("Sending status command")
         tn.write(b"status\n")
-        status_result = tn.read_until(b">", timeout=2)
+        status_result = tn.read_until(b">", timeout=1)
+        logging.debug(f"Received status result: {status_result}")
         
-        # Decode status output and parse lines
+        # Parse status output
         lines = status_result.decode('utf-8', errors='ignore').splitlines()
         
         file_name = None
@@ -138,137 +186,176 @@ def get_vlc_status_telnet(host=VLC_TELNET_HOST, port=VLC_TELNET_PORT, password=V
         for line in lines:
             if line.startswith("( state "):
                 state = line[len("( state "):].rstrip(" )").strip()
+                logging.debug(f"Found state: {state}")
             elif line.startswith("( new input: "):
                 file_name = line[len("( new input: "):].rstrip(" )").strip()
+                logging.debug(f"Found new input: {file_name}")
             elif line.startswith("input: "):
                 file_name = line[len("input: "):].strip()
+                logging.debug(f"Found input: {file_name}")
         
-        # Get current playback time
+        # Only proceed if we have valid state and file
+        if not (state in ("playing", "paused") and file_name):
+            logging.debug("No valid playback state or file")
+            return None
+            
+        # Get current time and length
+        logging.debug("Getting playback time")
         tn.write(b"get_time\n")
-        time_result = tn.read_until(b">", timeout=2)
+        time_result = tn.read_until(b">", timeout=1)
+        logging.debug(f"Received get_time result: {time_result}")
         
-        # Get total length
+        logging.debug("Getting total length")
         tn.write(b"get_length\n")
-        length_result = tn.read_until(b">", timeout=2)
-        
-        tn.close()
+        length_result = tn.read_until(b">", timeout=1)
+        logging.debug(f"Received get_length result: {length_result}")
         
         try:
             time_line = time_result.decode('utf-8', errors='ignore').strip().splitlines()[0]
             current_time = int(time_line)
+            logging.debug(f"Parsed playback time: {current_time}")
             
             length_line = length_result.decode('utf-8', errors='ignore').strip().splitlines()[0]
             total_length = int(length_line)
-        except Exception as e:
-            current_time = 0
-            total_length = 0
-        
-        # If state is playing or paused and file info is present, return status.
-        if state in ("playing", "paused") and file_name:
+            logging.debug(f"Parsed total length: {total_length}")
+            
             return {
                 "file": file_name,
                 "time": current_time,
                 "length": total_length,
                 "state": state
             }
-        else:
+            
+        except (ValueError, IndexError) as e:
+            logging.debug(f"Could not parse time/length: {str(e)}")
             return None
-    except Exception as e:
+            
+    except ConnectionRefusedError:
         return None
+    except Exception as e:
+        logging.error(f"Error fetching VLC status via telnet: {str(e)}")
+        return None
+    finally:
+        if tn:
+            try:
+                tn.close()
+            except:
+                pass
+
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 class VLCStatusWorker(QObject):
     status_ready = pyqtSignal(dict)
     vlc_not_running = pyqtSignal()
 
-    @pyqtSlot()  # Add this decorator to mark it as a slot
+    @pyqtSlot()
     def check_status(self):
-        if not is_vlc_running():
+        try:
+            if not is_vlc_running():
+                logging.debug("VLC not running")
+                self.vlc_not_running.emit()
+                return
+            
+            status = get_vlc_status_telnet()
+            if status:
+                logging.debug(f"Got VLC status: {status}")
+                self.status_ready.emit(status)
+            else:
+                # Don't spam empty status updates
+                logging.debug("No valid status received, emitting vlc_not_running")
+                self.vlc_not_running.emit()
+                
+        except Exception as e:
+            logging.error(f"Error in check_status: {str(e)}", exc_info=True)
+            # Emit vlc_not_running to maintain UI state
             self.vlc_not_running.emit()
-            return
-        
-        status = get_vlc_status_telnet()
-        if status:
-            self.status_ready.emit(status)
-        else:
-            self.status_ready.emit({})
 
 class VLCTracker(QWidget):
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("VLC Tracker")
-        self.setGeometry(100, 100, 800, 500)
+        try:
+            super().__init__()
+            logging.info("Starting VLC Tracker")
+            self.setWindowTitle("VLC Tracker")
+            self.setGeometry(100, 100, 800, 500)
 
-        if os.path.exists(ICON_FILE):
-            self.setWindowIcon(QIcon(ICON_FILE))
+            if os.path.exists(ICON_FILE):
+                self.setWindowIcon(QIcon(ICON_FILE))
 
 
-        # Initialize status tracking variables
-        self.current_file = None
-        self.current_time = 0
-        self.current_state = None
-        self.vlc_running = False
-        
-        # Create worker and move to thread properly
-        self.worker = VLCStatusWorker()
-        self.worker_thread = QThread()  # Create the thread first
-        self.worker.moveToThread(self.worker_thread)  # Move worker to thread
-        
-        # Connect signals
-        self.worker.status_ready.connect(self.on_status_ready, Qt.ConnectionType.QueuedConnection)
-        self.worker.vlc_not_running.connect(self.on_vlc_not_running, Qt.ConnectionType.QueuedConnection)
-        
-        # Start the thread
-        self.worker_thread.start()
-        
-        # Setup UI
-        layout = QVBoxLayout()
-        self.tabs = QTabWidget()
-        
-        # Now Playing Tab
-        self.now_playing_tab = QWidget()
-        np_layout = QVBoxLayout()
-        self.now_playing_label = QLabel("No video playing.")
-        np_layout.addWidget(self.now_playing_label)
-        self.now_playing_tab.setLayout(np_layout)
-        
-        # History Tab
-        self.history_tab = QWidget()
-        history_layout = QVBoxLayout()
-        self.history_list = QListWidget()
-        history_layout.addWidget(self.history_list)
-        self.history_tab.setLayout(history_layout)
-        
-        self.tabs.addTab(self.now_playing_tab, "Now Playing")
-        self.tabs.addTab(self.history_tab, "History")
-        layout.addWidget(self.tabs)
-        self.setLayout(layout)
+            # Initialize status tracking variables
+            self.current_file = None
+            self.current_time = 0
+            self.current_state = None
+            self.vlc_running = False
+            
+            # Create worker and move to thread properly
+            self.worker = VLCStatusWorker()
+            self.worker_thread = QThread()  # Create the thread first
+            self.worker.moveToThread(self.worker_thread)  # Move worker to thread
+            
+            # Connect signals
+            self.worker.status_ready.connect(self.on_status_ready, Qt.ConnectionType.QueuedConnection)
+            self.worker.vlc_not_running.connect(self.on_vlc_not_running, Qt.ConnectionType.QueuedConnection)
+            
+            # Start the thread
+            self.worker_thread.start()
+            
+            # Setup UI
+            layout = QVBoxLayout()
+            self.tabs = QTabWidget()
+            
+            # Now Playing Tab
+            self.now_playing_tab = QWidget()
+            np_layout = QVBoxLayout()
+            self.now_playing_label = QLabel("No video playing.")
+            np_layout.addWidget(self.now_playing_label)
+            self.now_playing_tab.setLayout(np_layout)
+            
+            # History Tab
+            self.history_tab = QWidget()
+            history_layout = QVBoxLayout()
+            self.history_list = QListWidget()
+            history_layout.addWidget(self.history_list)
+            self.history_tab.setLayout(history_layout)
+            
+            self.tabs.addTab(self.now_playing_tab, "Now Playing")
+            self.tabs.addTab(self.history_tab, "History")
+            layout.addWidget(self.tabs)
+            self.setLayout(layout)
 
-        self.settings_tab = QWidget()
-        settings_layout = QVBoxLayout()
-        
-        # Startup checkbox
-        settings = QSettings("VLCTracker", "Settings")
-        is_startup = settings.value("run_at_startup", False, bool)
-        self.startup_checkbox = QPushButton("Remove from Windows Startup" if is_startup else "Run on Windows Startup")
-        self.startup_checkbox.setCheckable(True)
-        self.startup_checkbox.setChecked(is_startup)
-        self.startup_checkbox.clicked.connect(self.toggle_startup)
-        
-        settings_layout.addWidget(self.startup_checkbox)
-        settings_layout.addStretch()
-        self.settings_tab.setLayout(settings_layout)
-        
-        self.tabs.addTab(self.settings_tab, "Settings")
+            self.settings_tab = QWidget()
+            settings_layout = QVBoxLayout()
+            
+            # Startup checkbox
+            settings = QSettings("VLCTracker", "Settings")
+            is_startup = settings.value("run_at_startup", False, bool)
+            self.startup_checkbox = QPushButton("Remove from Windows Startup" if is_startup else "Run on Windows Startup")
+            self.startup_checkbox.setCheckable(True)
+            self.startup_checkbox.setChecked(is_startup)
+            self.startup_checkbox.clicked.connect(self.toggle_startup)
+            
+            settings_layout.addWidget(self.startup_checkbox)
+            settings_layout.addStretch()
+            self.settings_tab.setLayout(settings_layout)
+            
+            self.tabs.addTab(self.settings_tab, "Settings")
 
-        # Create system tray
-        self.create_tray_icon()
-        
-        # Setup timer for status checks
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.start_status_check)
-        self.timer.start(2000)
-        
-        self.load_history()
+            # Create system tray
+            self.create_tray_icon()
+            
+            # Setup timer for status checks
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.start_status_check)
+            self.timer.start(2000)
+            
+            self.load_history()
+        except Exception as e:
+            logging.error(f"Error in initialization: {str(e)}", exc_info=True)
+            raise
 
     def show_startup_dialog(self):
         msg = QMessageBox()
@@ -569,6 +656,11 @@ class VLCTracker(QWidget):
         self.load_history()
 
 if __name__ == "__main__":
+    setup_logging()
+    
+    # Set up exception hook to catch crashes
+    sys.excepthook = log_crash
+    
     app = QApplication(sys.argv)
     tracker = VLCTracker()
     tracker.show()
