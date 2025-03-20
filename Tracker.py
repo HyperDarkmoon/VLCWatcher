@@ -15,9 +15,9 @@ ICON_FILE = "tracker.ico"
 TRAY_ICON_FILE = "tracker.png"  # 16x16 or 32x32 PNG recommended for tray
 
 HISTORY_FILE = "vlc_history.json"
-VLC_TELNET_HOST = "localhost"
-VLC_TELNET_PORT = 4212
-VLC_TELNET_PASSWORD = ""  # Set this if needed, else leave empty
+VLC_TELNET_HOST = "localhost" #VLC_TELNET_HOST
+VLC_TELNET_PORT = 4212 #VLC_TELNET_PORT
+VLC_TELNET_PASSWORD = ""  #VLC_TELNET_PASSWORD
 
 def rename_media_file(original_path, is_watched, timestamp=None):
     """Helper function to rename the media file"""
