@@ -404,16 +404,41 @@ class VLCTracker(QWidget):
         QMetaObject.invokeMethod(self.worker, "check_status", Qt.ConnectionType.QueuedConnection)
 
     def on_status_ready(self, status):
-        self.vlc_running = True
-        self.current_file = status["file"]
-        self.current_time = status["time"]
-        self.current_state = status["state"]
-        self.last_total_length = status["length"]
-        display_file = os.path.basename(self.current_file) if self.current_file else "Unknown"
-        state_str = "Paused" if self.current_state == "paused" else "Playing"
-        self.now_playing_label.setText(
-            f"{state_str}: {display_file} - {format_time(self.current_time)}"
-        )
+        try:
+            logging.debug(f"Status received: {status}")
+            
+            # Check if file changed
+            if self.current_file and status["file"] != self.current_file:
+                # Save progress for previous file before updating
+                is_watched = False
+                if hasattr(self, 'last_total_length') and self.last_total_length > 0:
+                    time_remaining = self.last_total_length - self.current_time
+                    is_watched = (time_remaining <= 90 or 
+                                (self.current_time / self.last_total_length) > 0.95)
+                
+                new_path = rename_media_file(
+                    self.current_file, 
+                    is_watched, 
+                    format_time_filename(self.current_time)
+                )
+                self.add_to_history(new_path, format_time(self.current_time), is_watched)
+            
+            # Update current status
+            self.vlc_running = True
+            self.current_file = status["file"]
+            self.current_time = status["time"]
+            self.current_state = status["state"]
+            self.last_total_length = status["length"]
+            
+            # Update display
+            display_file = os.path.basename(self.current_file) if self.current_file else "Unknown"
+            state_str = "Paused" if self.current_state == "paused" else "Playing"
+            self.now_playing_label.setText(
+                f"{state_str}: {display_file} - {format_time(self.current_time)}"
+            )
+            
+        except Exception as e:
+            logging.error(f"Error processing status: {str(e)}", exc_info=True)
 
     def toggle_startup(self):
         if self.startup_checkbox.isChecked():
