@@ -1,0 +1,24 @@
+# Build directories
+build/
+dist/
+__pycache__/
+
+# Python virtual environment
+venv/
+env/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Python cache files
+*.pyc
+*.pyo
+*.pyd
+
+# Application specific files
+vlc_history.json
+
+# Windows specific
+Thumbs.db
+Desktop.ini

@@ -3,7 +3,8 @@ import json
 import os
 import telnetlib
 import psutil
-from PyQt6.QtCore import QTimer
+import threading
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel, 
                            QListWidget, QTabWidget, QHBoxLayout, QPushButton,
                            QListWidgetItem, QMessageBox, QSystemTrayIcon, QMenu)
@@ -135,6 +136,19 @@ def get_vlc_status_telnet(host=VLC_TELNET_HOST, port=VLC_TELNET_PORT, password=V
     except Exception as e:
         return None
 
+class VLCStatusWorker(QObject):
+    status_ready = pyqtSignal(dict)
+    vlc_not_running = pyqtSignal()
+
+    def check_status(self):
+        if not is_vlc_running():
+            self.vlc_not_running.emit()
+            return
+        
+        status = get_vlc_status_telnet()
+        if status:
+            self.status_ready.emit(status)
+
 class VLCTracker(QWidget):
     def __init__(self):
         super().__init__()
@@ -142,16 +156,21 @@ class VLCTracker(QWidget):
         self.setGeometry(100, 100, 800, 500)
 
         if os.path.exists(ICON_FILE):
-                    self.setWindowIcon(QIcon(ICON_FILE))
-       
+            self.setWindowIcon(QIcon(ICON_FILE))
 
-        self.create_tray_icon()
-
+        # Initialize status tracking variables
         self.current_file = None
         self.current_time = 0
         self.current_state = None
         self.vlc_running = False
         
+        # Create worker and move to thread
+        self.worker = VLCStatusWorker()
+        self.worker_thread = threading.Thread(target=self.worker.check_status)
+        self.worker.status_ready.connect(self.on_status_ready)
+        self.worker.vlc_not_running.connect(self.on_vlc_not_running)
+        
+        # Setup UI
         layout = QVBoxLayout()
         self.tabs = QTabWidget()
         
@@ -173,13 +192,57 @@ class VLCTracker(QWidget):
         self.tabs.addTab(self.history_tab, "History")
         layout.addWidget(self.tabs)
         self.setLayout(layout)
+
+        # Create system tray
+        self.create_tray_icon()
         
+        # Setup timer for status checks
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_status)
+        self.timer.timeout.connect(self.start_status_check)
         self.timer.start(2000)
         
         self.load_history()
-    
+
+    def start_status_check(self):
+        if not self.worker_thread.is_alive():
+            self.worker_thread = threading.Thread(target=self.worker.check_status)
+            self.worker_thread.daemon = True  # Make thread daemon so it exits with main
+            self.worker_thread.start()
+
+    def on_status_ready(self, status):
+        self.vlc_running = True
+        self.current_file = status["file"]
+        self.current_time = status["time"]
+        self.current_state = status["state"]
+        self.last_total_length = status["length"]
+        display_file = os.path.basename(self.current_file) if self.current_file else "Unknown"
+        state_str = "Paused" if self.current_state == "paused" else "Playing"
+        self.now_playing_label.setText(
+            f"{state_str}: {display_file} - {format_time(self.current_time)}"
+        )
+
+    def on_vlc_not_running(self):
+        if self.vlc_running and self.current_file and self.current_time > 0:
+            is_watched = False
+            if hasattr(self, 'last_total_length') and self.last_total_length > 0:
+                time_remaining = self.last_total_length - self.current_time
+                is_watched = (time_remaining <= 90 or 
+                            (self.current_time / self.last_total_length) > 0.95)
+            
+            new_path = rename_media_file(
+                self.current_file, 
+                is_watched, 
+                format_time_filename(self.current_time)
+            )
+            
+            self.add_to_history(new_path, format_time(self.current_time), is_watched)
+            self.current_file = None
+            self.current_time = 0
+            self.current_state = None
+        
+        self.vlc_running = False
+        self.now_playing_label.setText("No video playing.")
+
     def create_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         icon_file = TRAY_ICON_FILE if os.path.exists(TRAY_ICON_FILE) else ICON_FILE
