@@ -142,18 +142,15 @@ class VLCStatusWorker(QObject):
 
     @pyqtSlot()  # Add this decorator to mark it as a slot
     def check_status(self):
-        print("DEBUG: Checking VLC status in worker thread")
         if not is_vlc_running():
-            print("DEBUG: VLC not running, emitting signal")
             self.vlc_not_running.emit()
             return
         
         status = get_vlc_status_telnet()
         if status:
-            print(f"DEBUG: Got VLC status: {status}")
             self.status_ready.emit(status)
         else:
-            print("DEBUG: No valid status received from VLC")
+            self.status_ready.emit({})
 
 class VLCTracker(QWidget):
     def __init__(self):
@@ -216,12 +213,10 @@ class VLCTracker(QWidget):
         self.load_history()
 
     def start_status_check(self):
-        print("DEBUG: Starting status check")
         # Use QMetaObject.invokeMethod for thread-safe invocation
         QMetaObject.invokeMethod(self.worker, "check_status", Qt.ConnectionType.QueuedConnection)
 
     def on_status_ready(self, status):
-        print(f"DEBUG: Status ready signal received: {status}")
         self.vlc_running = True
         self.current_file = status["file"]
         self.current_time = status["time"]
@@ -234,7 +229,6 @@ class VLCTracker(QWidget):
         )
 
     def on_vlc_not_running(self):
-        print("DEBUG: VLC not running signal received")
    
         if self.vlc_running and self.current_file and self.current_time > 0:
             is_watched = False
