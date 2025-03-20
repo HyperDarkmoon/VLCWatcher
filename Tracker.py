@@ -4,13 +4,14 @@ import os
 import telnetlib
 import psutil
 import threading
-from PyQt6.QtCore import QTimer, QObject, pyqtSignal, QThread, QMetaObject, Qt, pyqtSlot
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal, QThread, QMetaObject, Qt, pyqtSlot, QSettings
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel, 
                            QListWidget, QTabWidget, QHBoxLayout, QPushButton,
                            QListWidgetItem, QMessageBox, QSystemTrayIcon, QMenu)
 from PyQt6.QtGui import QIcon
-
+import winreg
 import os.path
+
 ICON_FILE = "tracker.ico"
 TRAY_ICON_FILE = "tracker.png"  # 16x16 or 32x32 PNG recommended for tray
 
@@ -18,6 +19,45 @@ HISTORY_FILE = "vlc_history.json"
 VLC_TELNET_HOST = "localhost" #VLC_TELNET_HOST
 VLC_TELNET_PORT = 4212 #VLC_TELNET_PORT
 VLC_TELNET_PASSWORD = ""  #VLC_TELNET_PASSWORD
+
+
+def add_to_startup():
+    """Add the application to Windows startup"""
+    app_path = os.path.abspath(sys.argv[0])
+    
+    # Check if running as .py file
+    if app_path.endswith('.py'):
+        return False, "Cannot add Python file to startup. Please use the compiled .exe version."
+    
+    key = winreg.HKEY_CURRENT_USER
+    startup_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    
+    try:
+        with winreg.OpenKey(key, startup_path, 0, winreg.KEY_SET_VALUE) as registry_key:
+            winreg.SetValueEx(registry_key, "VLCTracker", 0, winreg.REG_SZ, app_path)
+        return True, None
+    except Exception as e:
+        return False, f"Failed to add to startup: {e}"
+
+def remove_from_startup():
+    """Remove the application from Windows startup"""
+    key = winreg.HKEY_CURRENT_USER
+    startup_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    
+    try:
+        with winreg.OpenKey(key, startup_path, 0, winreg.KEY_SET_VALUE) as registry_key:
+            try:
+                winreg.DeleteValue(registry_key, "VLCTracker")
+                return True
+            except FileNotFoundError:
+                # Key doesn't exist, which is fine - it's already not in startup
+                return True
+            except Exception as e:
+                print(f"Failed to remove from startup: {e}")
+                return False
+    except Exception as e:
+        print(f"Failed to access startup registry: {e}")
+        return False
 
 def rename_media_file(original_path, is_watched, timestamp=None):
     """Helper function to rename the media file"""
@@ -161,6 +201,7 @@ class VLCTracker(QWidget):
         if os.path.exists(ICON_FILE):
             self.setWindowIcon(QIcon(ICON_FILE))
 
+
         # Initialize status tracking variables
         self.current_file = None
         self.current_time = 0
@@ -202,6 +243,23 @@ class VLCTracker(QWidget):
         layout.addWidget(self.tabs)
         self.setLayout(layout)
 
+        self.settings_tab = QWidget()
+        settings_layout = QVBoxLayout()
+        
+        # Startup checkbox
+        settings = QSettings("VLCTracker", "Settings")
+        is_startup = settings.value("run_at_startup", False, bool)
+        self.startup_checkbox = QPushButton("Remove from Windows Startup" if is_startup else "Run on Windows Startup")
+        self.startup_checkbox.setCheckable(True)
+        self.startup_checkbox.setChecked(is_startup)
+        self.startup_checkbox.clicked.connect(self.toggle_startup)
+        
+        settings_layout.addWidget(self.startup_checkbox)
+        settings_layout.addStretch()
+        self.settings_tab.setLayout(settings_layout)
+        
+        self.tabs.addTab(self.settings_tab, "Settings")
+
         # Create system tray
         self.create_tray_icon()
         
@@ -211,6 +269,35 @@ class VLCTracker(QWidget):
         self.timer.start(2000)
         
         self.load_history()
+
+    def show_startup_dialog(self):
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText("Startup Configuration")
+        msg.setInformativeText("Would you like VLC Tracker to run automatically when Windows starts?")
+        msg.setWindowTitle("Startup Configuration")
+        
+        # Add custom buttons
+        yes_button = msg.addButton("Yes", QMessageBox.ButtonRole.YesRole)
+        no_button = msg.addButton("No", QMessageBox.ButtonRole.NoRole)
+        never_button = msg.addButton("Never ask again", QMessageBox.ButtonRole.RejectRole)
+        
+        msg.exec()
+        
+        clicked_button = msg.clickedButton()
+        settings = QSettings("VLCTracker", "Settings")
+        
+        if clicked_button == yes_button:
+            add_to_startup()
+            settings.setValue("startup_configured", True)
+            settings.setValue("run_at_startup", True)
+        elif clicked_button == no_button:
+            remove_from_startup()
+            settings.setValue("startup_configured", True)  # Changed from False
+            settings.setValue("run_at_startup", False)
+        elif clicked_button == never_button:
+            settings.setValue("startup_configured", True)
+            settings.setValue("run_at_startup", False)
 
     def start_status_check(self):
         # Use QMetaObject.invokeMethod for thread-safe invocation
@@ -227,6 +314,23 @@ class VLCTracker(QWidget):
         self.now_playing_label.setText(
             f"{state_str}: {display_file} - {format_time(self.current_time)}"
         )
+
+    def toggle_startup(self):
+        if self.startup_checkbox.isChecked():
+            success, error_msg = add_to_startup()
+            if not success:
+                self.startup_checkbox.setChecked(False)
+                QMessageBox.warning(self, "Startup Error", error_msg)
+                return
+                
+            settings = QSettings("VLCTracker", "Settings")
+            settings.setValue("run_at_startup", True)
+            self.startup_checkbox.setText("Remove from Windows Startup")
+        else:
+            if remove_from_startup():
+                settings = QSettings("VLCTracker", "Settings")
+                settings.setValue("run_at_startup", False)
+                self.startup_checkbox.setText("Run on Windows Startup")
 
     def on_vlc_not_running(self):
    
