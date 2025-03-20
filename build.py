@@ -1,5 +1,8 @@
 import sys
 from cx_Freeze import setup, Executable
+import os
+
+ICONS_DIR = "icons"
 
 build_exe_options = {
     "packages": [
@@ -13,7 +16,8 @@ build_exe_options = {
         "logging.handlers",
         "threading",
         "winreg",
-        "datetime"
+        "datetime",
+        "appdirs"
     ],
     "includes": [
         "PyQt6.QtCore", 
@@ -22,14 +26,15 @@ build_exe_options = {
         "PyQt6.sip"
     ],
     "include_files": [
-        ("vlc_history.json", "vlc_history.json"),
-        ("tracker.ico", "tracker.ico"),
-        ("tracker.png", "tracker.png"),
-        ("trash.png", "trash.png")
+        (os.path.join(ICONS_DIR, "tracker.ico"), os.path.join("icons", "tracker.ico")),
+        (os.path.join(ICONS_DIR, "tracker.png"), os.path.join("icons", "tracker.png")),
+        (os.path.join(ICONS_DIR, "trash.png"), os.path.join("icons", "trash.png"))
     ],
+    "build_exe": os.path.join("build", "VLCTracker"),
     "excludes": ["tkinter", "test", "unittest"],
     "optimize": 2,
     "include_msvcr": True  # Moved outside of build_exe dict
+
 }
 
 base = None

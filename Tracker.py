@@ -14,13 +14,24 @@ import os.path
 import logging
 import datetime
 from logging.handlers import RotatingFileHandler
+import appdirs
 
-LOG_FILE = "vlctracker.log"
+# Change LOG_FILE definition
+USER_DATA_DIR = appdirs.user_data_dir("VLCTracker", "VLCTracker")
+if not os.path.exists(USER_DATA_DIR):
+    os.makedirs(USER_DATA_DIR)
 
-ICON_FILE = "tracker.ico"
-TRAY_ICON_FILE = "tracker.png"  # 16x16 or 32x32 PNG recommended for tray
+LOG_FILE = os.path.join(USER_DATA_DIR, "vlctracker.log")
+HISTORY_FILE = os.path.join(USER_DATA_DIR, "vlc_history.json")
 
-HISTORY_FILE = "vlc_history.json"
+ICON_FILE = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__), 
+                        "icons", "tracker.ico")
+TRAY_ICON_FILE = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__),
+                             "icons", "tracker.png")
+TRASH_ICON_FILE = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__),
+                              "icons", "trash.png")
+
+
 VLC_TELNET_HOST = "localhost" #VLC_TELNET_HOST
 VLC_TELNET_PORT = 4212 #VLC_TELNET_PORT
 VLC_TELNET_PASSWORD = ""  #VLC_TELNET_PASSWORD
@@ -61,6 +72,7 @@ def log_crash(exc_type, exc_value, exc_traceback):
 def add_to_startup():
     """Add the application to Windows startup"""
     app_path = os.path.abspath(sys.argv[0])
+    app_dir = os.path.dirname(app_path)
     
     # Check if running as .py file
     if app_path.endswith('.py'):
@@ -71,7 +83,8 @@ def add_to_startup():
     
     try:
         with winreg.OpenKey(key, startup_path, 0, winreg.KEY_SET_VALUE) as registry_key:
-            winreg.SetValueEx(registry_key, "VLCTracker", 0, winreg.REG_SZ, app_path)
+            # Use the full path to the executable
+            winreg.SetValueEx(registry_key, "VLCTracker", 0, winreg.REG_SZ, f'"{app_path}"')
         return True, None
     except Exception as e:
         return False, f"Failed to add to startup: {e}"
@@ -443,20 +456,36 @@ class VLCTracker(QWidget):
         self.now_playing_label.setText("No video playing.")
 
     def create_tray_icon(self):
-        self.tray_icon = QSystemTrayIcon(self)
-        icon_file = TRAY_ICON_FILE if os.path.exists(TRAY_ICON_FILE) else ICON_FILE
-        self.tray_icon.setIcon(QIcon(icon_file))
+        try:
+            self.tray_icon = QSystemTrayIcon(self)
+            
+            # Get correct icon path
+            icon_path = os.path.join(
+                os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__),
+                "icons",
+                "tracker.png"
+            )
+            
+            if os.path.exists(icon_path):
+                self.tray_icon.setIcon(QIcon(icon_path))
+                logging.debug(f"Set tray icon from: {icon_path}")
+            else:
+                logging.error(f"Tray icon not found at: {icon_path}")
 
-        # Create tray menu
-        tray_menu = QMenu()
-        show_action = tray_menu.addAction("Show")
-        show_action.triggered.connect(self.show)
-        quit_action = tray_menu.addAction("Quit")
-        quit_action.triggered.connect(self.quit_application)
+            # Create tray menu
+            tray_menu = QMenu()
+            show_action = tray_menu.addAction("Show")
+            show_action.triggered.connect(self.show)
+            quit_action = tray_menu.addAction("Quit")
+            quit_action.triggered.connect(self.quit_application)
 
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self.on_tray_icon_activated)
-        self.tray_icon.show()
+            self.tray_icon.setContextMenu(tray_menu)
+            self.tray_icon.activated.connect(self.on_tray_icon_activated)
+            self.tray_icon.show()
+            logging.debug("Tray icon created and shown")
+        except Exception as e:
+            logging.error(f"Error creating tray icon: {str(e)}", exc_info=True)
+
 
     def on_tray_icon_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -465,14 +494,21 @@ class VLCTracker(QWidget):
             self.activateWindow()
         
     def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-        self.tray_icon.showMessage(
-            "VLC Tracker",
-            "Application minimized to tray",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000
-        )
+        try:
+            if self.tray_icon and self.tray_icon.isVisible():
+                event.ignore()
+                self.hide()
+                self.tray_icon.showMessage(
+                    "VLC Tracker",
+                    "Application minimized to tray",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    2000
+                )
+                logging.debug("Application minimized to tray")
+            else:
+                logging.error("Tray icon not available for minimize")
+        except Exception as e:
+            logging.error(f"Error in closeEvent: {str(e)}", exc_info=True)
         
     def quit_application(self):
         self.tray_icon.hide()
@@ -537,7 +573,7 @@ class VLCTracker(QWidget):
                     # Create delete button
                     delete_btn = QPushButton()
                     delete_btn.setFixedSize(24, 24)
-                    delete_btn.setIcon(QIcon("trash.png"))
+                    delete_btn.setIcon(QIcon(TRASH_ICON_FILE) if os.path.exists(TRASH_ICON_FILE) else QIcon("trash.png"))
                     delete_btn.setToolTip("Delete from history")
                     delete_btn.setProperty("file_path", entry['file'])
                     delete_btn.clicked.connect(self.delete_history_entry)

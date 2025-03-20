@@ -5,7 +5,10 @@ A system tray application that tracks your VLC media player progress and manages
 ## Features
 
 - Tracks current playing media in VLC
-- Shows watch progress with color coding
+- Shows watch progress with color coding:
+  - Green: Watched
+  - Yellow: Past halfway point
+  - Red: Before halfway point
 - Maintains a history of watched files
 - Renames files with progress or [WATCHED] tag
 - Minimizes to system tray
@@ -21,6 +24,7 @@ A system tray application that tracks your VLC media player progress and manages
   pip install PyQt6
   pip install psutil
   pip install cx_Freeze
+  pip install appdirs
   ```
 
 ## Building from Source
@@ -29,7 +33,6 @@ A system tray application that tracks your VLC media player progress and manages
    - `tracker.ico` - Application icon
    - `tracker.png` - Tray icon (16x16 or 32x32)
    - `trash.png` - Delete button icon
-   - `vlc_history.json` (will be created if not exists)
 
 2. Build the executable:
    ```bash
@@ -48,9 +51,16 @@ A system tray application that tracks your VLC media player progress and manages
    - Set telnet password if desired (default: none)
    - Default port is 4212
 
+## Application Data
+
+- All application data is stored in: `%APPDATA%\VLCTracker\`
+- Files stored:
+  - `vlctracker.log` - Log files with rotation (max 4MB total)
+  - `vlc_history.json` - Watch history
+
 ## Debug Logs
 
-- Logs are stored in `vlctracker.log`
+- Logs are stored in `%APPDATA%\VLCTracker\vlctracker.log`
 - Log files rotate after reaching 1MB
 - Keeps last 3 backup files
 - Only errors and warnings are logged by default
