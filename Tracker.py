@@ -4,7 +4,7 @@ import os
 import telnetlib
 import psutil
 import threading
-from PyQt6.QtCore import QTimer, QObject, pyqtSignal
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal, QThread, QMetaObject, Qt, pyqtSlot
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel, 
                            QListWidget, QTabWidget, QHBoxLayout, QPushButton,
                            QListWidgetItem, QMessageBox, QSystemTrayIcon, QMenu)
@@ -140,14 +140,20 @@ class VLCStatusWorker(QObject):
     status_ready = pyqtSignal(dict)
     vlc_not_running = pyqtSignal()
 
+    @pyqtSlot()  # Add this decorator to mark it as a slot
     def check_status(self):
+        print("DEBUG: Checking VLC status in worker thread")
         if not is_vlc_running():
+            print("DEBUG: VLC not running, emitting signal")
             self.vlc_not_running.emit()
             return
         
         status = get_vlc_status_telnet()
         if status:
+            print(f"DEBUG: Got VLC status: {status}")
             self.status_ready.emit(status)
+        else:
+            print("DEBUG: No valid status received from VLC")
 
 class VLCTracker(QWidget):
     def __init__(self):
@@ -164,11 +170,17 @@ class VLCTracker(QWidget):
         self.current_state = None
         self.vlc_running = False
         
-        # Create worker and move to thread
+        # Create worker and move to thread properly
         self.worker = VLCStatusWorker()
-        self.worker_thread = threading.Thread(target=self.worker.check_status)
-        self.worker.status_ready.connect(self.on_status_ready)
-        self.worker.vlc_not_running.connect(self.on_vlc_not_running)
+        self.worker_thread = QThread()  # Create the thread first
+        self.worker.moveToThread(self.worker_thread)  # Move worker to thread
+        
+        # Connect signals
+        self.worker.status_ready.connect(self.on_status_ready, Qt.ConnectionType.QueuedConnection)
+        self.worker.vlc_not_running.connect(self.on_vlc_not_running, Qt.ConnectionType.QueuedConnection)
+        
+        # Start the thread
+        self.worker_thread.start()
         
         # Setup UI
         layout = QVBoxLayout()
@@ -204,12 +216,12 @@ class VLCTracker(QWidget):
         self.load_history()
 
     def start_status_check(self):
-        if not self.worker_thread.is_alive():
-            self.worker_thread = threading.Thread(target=self.worker.check_status)
-            self.worker_thread.daemon = True  # Make thread daemon so it exits with main
-            self.worker_thread.start()
+        print("DEBUG: Starting status check")
+        # Use QMetaObject.invokeMethod for thread-safe invocation
+        QMetaObject.invokeMethod(self.worker, "check_status", Qt.ConnectionType.QueuedConnection)
 
     def on_status_ready(self, status):
+        print(f"DEBUG: Status ready signal received: {status}")
         self.vlc_running = True
         self.current_file = status["file"]
         self.current_time = status["time"]
@@ -222,6 +234,8 @@ class VLCTracker(QWidget):
         )
 
     def on_vlc_not_running(self):
+        print("DEBUG: VLC not running signal received")
+   
         if self.vlc_running and self.current_file and self.current_time > 0:
             is_watched = False
             if hasattr(self, 'last_total_length') and self.last_total_length > 0:
@@ -332,20 +346,16 @@ class VLCTracker(QWidget):
                     
                     # Create label for file info
                     label = QLabel(f"{os.path.basename(entry['file'])} - {entry['timestamp']}")
-                    label.setStyleSheet("color: black;")  # Force black text
+                    label.setStyleSheet("color: black;")
                     layout.addWidget(label)
-                
                     
-                    # Create delete button with trash icon
+                    # Create delete button
                     delete_btn = QPushButton()
                     delete_btn.setFixedSize(24, 24)
                     delete_btn.setIcon(QIcon("trash.png"))
                     delete_btn.setToolTip("Delete from history")
-                    
-                    # Store the file path in the button's property for deletion
                     delete_btn.setProperty("file_path", entry['file'])
                     delete_btn.clicked.connect(self.delete_history_entry)
-                    
                     layout.addWidget(delete_btn)
                     layout.addStretch()
                     
@@ -353,22 +363,27 @@ class VLCTracker(QWidget):
                     
                     # Set background color based on status
                     if entry.get('watched', False):
-                        item_widget.setStyleSheet("QWidget { background-color: #90EE90; } QLabel { color: black; }")
+                        item_widget.setStyleSheet("QWidget { background-color: #90EE90; } QLabel { color: black; }")  # Green
                     else:
                         timestamp = entry['timestamp']
                         if timestamp != "[WATCHED]":
                             try:
                                 minutes, seconds = map(int, timestamp.split(':'))
-                                total_seconds = minutes * 60 + seconds
-                                if total_seconds > (entry.get('length', 0) / 2):
-                                    item_widget.setStyleSheet("QWidget { background-color: #FFD700; } QLabel { color: black; }")
-                                else:
-                                    item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")
-                            except:
-                                    item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")
-                        else:
-                            item_widget.setStyleSheet("QWidget { background-color: #90EE90; } QLabel { color: black; }")
+                                current_time = minutes * 60 + seconds
+                                total_length = entry.get('length', 0)
                                 
+                                if total_length > 0:
+                                    progress = current_time / total_length
+                                    if progress > 0.5:
+                                        item_widget.setStyleSheet("QWidget { background-color: #FFD700; } QLabel { color: black; }")  # Yellow
+                                    else:
+                                        item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")  # Light red
+                                else:
+                                    item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")  # Light red
+                            except:
+                                item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")  # Light red
+                        else:
+                            item_widget.setStyleSheet("QWidget { background-color: #90EE90; } QLabel { color: black; }")  # Green
                     
                     # Create and add list widget item
                     item = QListWidgetItem()
@@ -448,9 +463,9 @@ class VLCTracker(QWidget):
             history.append({
                 "file": file,
                 "timestamp": "[WATCHED]" if is_watched else timestamp,
-                "watched": is_watched
+                "watched": is_watched,
+                "length": self.last_total_length if hasattr(self, 'last_total_length') else 0
             })
-        
         with open(HISTORY_FILE, "w") as f:
             json.dump(history, f, indent=4)
         self.load_history()
