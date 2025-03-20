@@ -10,64 +10,59 @@ A system tray application that tracks your VLC media player progress and manages
 - Renames files with progress or [WATCHED] tag
 - Minimizes to system tray
 - Delete files directly from history
+- Automatic crash logging and debugging
 
 ## Requirements
 
 - Python 3.8+
 - VLC Media Player with telnet interface enabled
+- Required Python packages:
+  ```bash
+  pip install PyQt6
+  pip install psutil
+  pip install cx_Freeze
+  ```
 
-### Enable VLC Telnet Interface
+## Building from Source
 
-1. Open VLC
-2. Go to Tools -> Preferences
+1. Ensure all required files are present:
+   - `tracker.ico` - Application icon
+   - `tracker.png` - Tray icon (16x16 or 32x32)
+   - `trash.png` - Delete button icon
+   - `vlc_history.json` (will be created if not exists)
+
+2. Build the executable:
+   ```bash
+   python build.py build
+   ```
+
+3. The executable will be created in `build/exe.win-amd64-3.10/` directory
+
+## VLC Configuration
+
+1. Open VLC Media Player
+2. Go to Tools > Preferences
 3. Show settings: All
-4. Interface -> Main interfaces -> Check 'Telnet'
-5. Interface -> Main interfaces -> Lua -> Configure password if desired
+4. Interface > Main interfaces > Check 'Telnet'
+5. Interface > Main interfaces > Lua:
+   - Set telnet password if desired (default: none)
+   - Default port is 4212
 
-## Installation
+## Debug Logs
 
-1. Clone this repository:
-```bash
-git clone https://github.com/hyperdarkmoon/VLCWatcher.git
-cd Tracker
-```
+- Logs are stored in `vlctracker.log`
+- Log files rotate after reaching 1MB
+- Keeps last 3 backup files
+- Only errors and warnings are logged by default
+- Full debug logs are captured during crashes
 
-2. Install required packages:
-```bash
-pip install PyQt6
-pip install psutil
-pip install cx_Freeze
-```
+## Startup Configuration
 
-## Building the Executable
+- Can be configured to run on Windows startup
+- Settings are accessible from the Settings tab
+- Startup configuration only works with the compiled .exe version
 
-To create a standalone executable:
-
-```bash
-python build.py build
-```
-
-The executable will be created in the `build` directory.
-
-## Usage
-
-1. Run the executable
-2. Play media in VLC
-3. The app will track your progress
-4. Files will be renamed with timestamps or [WATCHED] when closed
-5. Access history in the History tab
-6. Right-click tray icon to show/quit
-
-## Configuration
-
-Edit these constants in `Tracker.py`:
-
-- `VLC_TELNET_HOST`: VLC telnet host (default: "localhost")
-- `VLC_TELNET_PORT`: VLC telnet port (default: 4212)
-- `VLC_TELNET_PASSWORD`: VLC telnet password (if configured)
-
-## Notes
-
+## Notes 
 - Files are considered "watched" when:
   - Within last 90 seconds of end
   - Or completed 95% of total length
