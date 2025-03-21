@@ -342,7 +342,9 @@ class VLCTracker(QWidget):
 
             self.settings_tab = QWidget()
             settings_layout = QVBoxLayout()
-            
+
+            self.history_list.itemDoubleClicked.connect(self.play_history_item)
+
             # Startup checkbox
             settings = QSettings("VLCTracker", "Settings")
             is_startup = settings.value("run_at_startup", False, bool)
@@ -458,7 +460,15 @@ class VLCTracker(QWidget):
                 self.startup_checkbox.setText("Run on Windows Startup")
 
     def on_vlc_not_running(self):
-   
+        if self.skip_next_rename:
+            self.skip_next_rename = False
+            self.vlc_running = False
+            self.current_file = None
+            self.current_time = 0
+            self.current_state = None
+            self.now_playing_label.setText("No video playing.")
+            return
+        
         if self.vlc_running and self.current_file and self.current_time > 0:
             is_watched = False
             if hasattr(self, 'last_total_length') and self.last_total_length > 0:
@@ -589,6 +599,7 @@ class VLCTracker(QWidget):
                     # Create widget for the entry
                     item_widget = QWidget()
                     layout = QHBoxLayout()
+                    layout.setContentsMargins(5, 5, 5, 5)  # Add padding
                     
                     # Create label for file info
                     label = QLabel(f"{os.path.basename(entry['file'])} - {entry['timestamp']}")
@@ -607,9 +618,24 @@ class VLCTracker(QWidget):
                     
                     item_widget.setLayout(layout)
                     
-                    # Set background color based on status
+                    # Store the file path for double click handling
+                    item_widget.setProperty("file_path", entry['file'])
+                    
+                    # Set background color and hover effect based on status
+                    base_style = """
+                    QWidget {
+                        border-radius: 5px;
+                        padding: 5px;
+                        margin: 2px;
+                    }
+                    QWidget:hover {
+                        border: 1px solid #666;
+                        background-color: rgba(255, 255, 255, 0.2);
+                    }
+                    """
+                    
                     if entry.get('watched', False):
-                        item_widget.setStyleSheet("QWidget { background-color: #90EE90; } QLabel { color: black; }")  # Green
+                        item_widget.setStyleSheet(f"{base_style} QWidget {{ background-color: #90EE90; }} QLabel {{ color: black; }}")
                     else:
                         timestamp = entry['timestamp']
                         if timestamp != "[WATCHED]":
@@ -621,15 +647,15 @@ class VLCTracker(QWidget):
                                 if total_length > 0:
                                     progress = current_time / total_length
                                     if progress > 0.5:
-                                        item_widget.setStyleSheet("QWidget { background-color: #FFD700; } QLabel { color: black; }")  # Yellow
+                                        item_widget.setStyleSheet(f"{base_style} QWidget {{ background-color: #FFD700; }} QLabel {{ color: black; }}")
                                     else:
-                                        item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")  # Light red
+                                        item_widget.setStyleSheet(f"{base_style} QWidget {{ background-color: #FFB6C1; }} QLabel {{ color: black; }}")
                                 else:
-                                    item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")  # Light red
+                                    item_widget.setStyleSheet(f"{base_style} QWidget {{ background-color: #FFB6C1; }} QLabel {{ color: black; }}")
                             except:
-                                item_widget.setStyleSheet("QWidget { background-color: #FFB6C1; } QLabel { color: black; }")  # Light red
+                                item_widget.setStyleSheet(f"{base_style} QWidget {{ background-color: #FFB6C1; }} QLabel {{ color: black; }}")
                         else:
-                            item_widget.setStyleSheet("QWidget { background-color: #90EE90; } QLabel { color: black; }")  # Green
+                            item_widget.setStyleSheet(f"{base_style} QWidget {{ background-color: #90EE90; }} QLabel {{ color: black; }}")
                     
                     # Create and add list widget item
                     item = QListWidgetItem()
@@ -641,6 +667,22 @@ class VLCTracker(QWidget):
             with open(HISTORY_FILE, "w") as f:
                 json.dump([], f)
     
+    def play_history_item(self, item):
+        try:
+            widget = self.history_list.itemWidget(item)
+            if widget:
+                file_path = widget.property("file_path")
+                if file_path and os.path.exists(file_path):
+                    # Set flag to skip next rename
+                    self.skip_next_rename = True
+                    # Start VLC with the file
+                    os.startfile(file_path)
+                else:
+                    QMessageBox.warning(self, "File Not Found", 
+                        "The video file could not be found.\nIt may have been moved or deleted.")
+        except Exception as e:
+            logging.error(f"Error playing history item: {str(e)}", exc_info=True)
+
     def delete_history_entry(self):
         # Get the sender button
         button = self.sender()
