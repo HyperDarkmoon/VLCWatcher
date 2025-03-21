@@ -39,35 +39,51 @@ VLC_TELNET_PASSWORD = ""  #VLC_TELNET_PASSWORD
 
 def setup_logging():
     """Configure logging with rotation and different log levels"""
-    # Create rotating file handler
-    handler = RotatingFileHandler(
-        LOG_FILE,
-        maxBytes=1024 * 1024,  # 1MB per file
-        backupCount=3  # Keep 3 backup files
-    )
-    
-    # Set formatter
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.WARNING)  # Only log warnings and errors by default
-    root_logger.addHandler(handler)
-    
-    # Create debug logger for crash dumps
-    debug_logger = logging.getLogger('debug')
-    debug_logger.setLevel(logging.DEBUG)
-    debug_logger.addHandler(handler)
+    try:
+        # Remove any existing handlers
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+            
+        # Create rotating file handler with more permissive file access
+        handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=1024 * 1024,  # 1MB per file
+            backupCount=3,  # Keep 3 backup files
+            delay=True  # Don't open the file until first log message
+        )
+        
+        # Set formatter
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        
+        # Configure root logger
+        root_logger.setLevel(logging.WARNING)
+        root_logger.addHandler(handler)
+        
+        # Don't create separate debug logger, use root logger with filter
+        logging.info("Logging system initialized")
+        
+    except Exception as e:
+        print(f"Failed to setup logging: {e}")
 
-# Add this function to capture crashes
+# Remove the separate basicConfig call
+# Remove this section:
+# logging.basicConfig(
+#     filename=LOG_FILE,
+#     level=logging.DEBUG,
+#     format='%(asctime)s - %(levelname)s - %(message)s'
+# )
+
 def log_crash(exc_type, exc_value, exc_traceback):
     """Log uncaught exceptions with full debug info"""
-    debug_logger = logging.getLogger('debug')
-    debug_logger.critical(
-        "Uncaught exception:",
-        exc_info=(exc_type, exc_value, exc_traceback)
-    )
+    try:
+        logging.critical(
+            "Uncaught exception:",
+            exc_info=(exc_type, exc_value, exc_traceback)
+        )
+    except Exception as e:
+        print(f"Failed to log crash: {e}")
 
 def add_to_startup():
     """Add the application to Windows startup"""
@@ -304,6 +320,9 @@ class VLCTracker(QWidget):
             self.current_time = 0
             self.current_state = None
             self.vlc_running = False
+            self.skip_next_rename = False  # Add this line
+            self.skip_history_update = False  # Add this line too
+
             
             # Create worker and move to thread properly
             self.worker = VLCStatusWorker()
